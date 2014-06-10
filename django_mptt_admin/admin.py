@@ -1,4 +1,5 @@
 from functools import update_wrapper
+import inspect
 
 from django.core.exceptions import PermissionDenied, SuspiciousOperation
 from django.core.urlresolvers import reverse
@@ -25,7 +26,6 @@ class DjangoMpttAdmin(admin.ModelAdmin):
             raise PermissionDenied()
 
         change_list = self.get_change_list_for_tree(request)
-
         context = dict(
             title=change_list.title,
             app_label=self.model._meta.app_label,
@@ -161,7 +161,7 @@ class DjangoMpttAdmin(admin.ModelAdmin):
         node_id = request.GET.get('node')
 
         if node_id:
-            node = self.model.objects.get(id=node_id)
+            node = self.model.objects.get(pk=node_id)
             max_level = node.level + 1
         else:
             max_level = self.tree_load_on_demand
@@ -194,4 +194,34 @@ class FixedChangeList(ChangeList):
             'admin:%s_%s_change' % (self.opts.app_label, self.opts.module_name),
             args=[quote(pk)],
             current_app=self.model_admin.admin_site.name
+        )
+
+
+class PolymorphicTreeAdmin(DjangoMpttAdmin):
+    def get_tree_data(self, qs, max_level):
+        pk_attname = self.model._meta.pk.attname
+
+        def handle_create_node(instance, node_info):
+            pk = getattr(instance, pk_attname)
+
+            node_info.update(
+                url=self.get_admin_url('change', (pk,), instance=instance),
+                move_url=self.get_admin_url('move', (pk,))
+            )
+        return util.get_tree_from_queryset(qs, handle_create_node, max_level)
+
+    def get_admin_url(self, name, args=None, instance=None):
+        model = self.model
+        if instance:
+            for m in inspect.getmro(instance.__class__):
+                if m in admin.site._registry:
+                    model = m
+                    break
+        opts = model._meta
+        url_name = 'admin:%s_%s_%s' % (opts.app_label, util.get_model_name(model), name)
+
+        return reverse(
+            url_name,
+            args=args,
+            current_app=self.admin_site.name
         )
